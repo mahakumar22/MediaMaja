@@ -150,13 +150,22 @@ describe("honesty about what it understood", () => {
     assert.equal(result.applied.length, 2);
   });
 
-  it("reports words it did not understand rather than ignoring them", () => {
-    const result = parse("make it brighter and add a unicorn");
+  it("reports wording it could not place rather than ignoring it", () => {
+    const result = parse("make it brighter and zoosh the flibbertigibbet");
     assert.ok(result.adjustments.brightness > 0, "the half it understood still applied");
     assert.ok(
-      result.unknown.some((phrase) => phrase.includes("unicorn")),
-      `expected the unicorn to be reported, got ${JSON.stringify(result.unknown)}`,
+      result.unknown.some((phrase) => phrase.includes("flibbertigibbet")),
+      `expected the nonsense to be reported, got ${JSON.stringify(result.unknown)}`,
     );
+  });
+
+  // "add a unicorn" is not bad wording, it is a thing this app cannot do, and
+  // the two deserve different answers.
+  it("calls an impossible request impossible, not unrecognised", () => {
+    const result = parse("make it brighter and add a unicorn");
+    assert.ok(result.adjustments.brightness > 0);
+    assert.ok(result.unsupported.some((item) => item.includes("adding")));
+    assert.equal(result.unknown.length, 0);
   });
 
   it("does not report ordinary filler as misunderstood", () => {
@@ -194,5 +203,97 @@ describe("robustness", () => {
   it("is not confused by a word appearing inside another word", () => {
     // "warm" inside "swarm" must not trigger a warmth change.
     assert.equal(parse("swarm").adjustments.warmth, 0);
+  });
+});
+
+describe("sentences and paragraphs", () => {
+  it("reads a polite full sentence", () => {
+    const result = parse("Could you please make this a little warmer?");
+    assert.ok(result.adjustments.warmth > 0);
+    assert.equal(result.unknown.length, 0, `unexpected unknowns: ${result.unknown}`);
+  });
+
+  it("picks up several ideas from one paragraph", () => {
+    const result = parse(
+      "This is a photo of my grandmother from the 1970s. I would like it to feel " +
+        "warm and nostalgic, like an old family photograph. Please make it a little softer.",
+    );
+    assert.ok(result.adjustments.warmth > 0, "warmth");
+    assert.ok(result.adjustments.sepia > 0, "vintage look applied");
+    assert.ok(result.adjustments.blur > 0, "softer");
+  });
+
+  // Prose carries context that is not an instruction. Flagging it as
+  // misunderstood makes the app look broken when it worked fine.
+  it("stays silent about sentences that are context, not requests", () => {
+    const result = parse(
+      "This is a photo of my grandmother from the 1970s. Make it warmer.",
+    );
+    assert.equal(
+      result.unknown.length,
+      0,
+      `context should not be reported as unknown, got ${JSON.stringify(result.unknown)}`,
+    );
+  });
+
+  it("handles several sentences with different intensities", () => {
+    const result = parse("Make it much brighter. Add a little grain. Slightly cooler.");
+    assert.ok(result.adjustments.brightness > 20, "much brighter is a big step");
+    assert.ok(result.adjustments.grain > 0 && result.adjustments.grain < 25, "a little grain is small");
+    assert.ok(result.adjustments.warmth < 0, "cooler");
+  });
+
+  it("reads more than one effect from a single clause", () => {
+    const result = parse("I want it bright vivid and sharp");
+    assert.ok(result.adjustments.brightness > 0, "brightness");
+    assert.ok(result.adjustments.saturation > 0, "saturation");
+    assert.ok(result.adjustments.sharpen > 0, "sharpen");
+  });
+
+  it("does not repeat itself when a paragraph says the same thing twice", () => {
+    const result = parse("Make it warmer. Really warm please. Warmer still.");
+    assert.equal(new Set(result.applied).size, result.applied.length, "applied has duplicates");
+  });
+
+  it("understands mood words as whole looks", () => {
+    assert.ok(parse("make it moody").adjustments.contrast > 0);
+    assert.ok(parse("bright and airy please").adjustments.brightness > 0);
+    assert.ok(parse("I want a golden hour feel").adjustments.warmth > 0);
+    assert.ok(parse("give it a professional look").adjustments.sharpen > 0);
+  });
+});
+
+describe("requests it cannot do", () => {
+  // "Not understood" implies a wording problem the user could fix by
+  // rephrasing. These are things the app genuinely cannot do, and saying so
+  // is the difference between a helpful answer and a wild goose chase.
+  it("separates impossible requests from unrecognised wording", () => {
+    const result = parse("make it brighter and remove the person on the left");
+    assert.ok(result.adjustments.brightness > 0, "the possible half still applied");
+    assert.ok(
+      result.unsupported.some((item) => item.includes("removing")),
+      `expected an unsupported note, got ${JSON.stringify(result.unsupported)}`,
+    );
+    assert.equal(result.unknown.length, 0, "it should not also be called unknown");
+  });
+
+  it("recognises the usual generative asks", () => {
+    for (const text of [
+      "change the background to a beach",
+      "make it look like an oil painting",
+      "crop it to a square",
+      "add some text at the top",
+      "fix her skin",
+    ]) {
+      assert.ok(parse(text).unsupported.length > 0, `expected unsupported for: ${text}`);
+    }
+  });
+
+  // "remove the grain" is an adjustment, not a generative edit.
+  it("still treats removing an effect as an ordinary adjustment", () => {
+    const grainy = parse("add lots of grain").adjustments;
+    const result = parse("remove the grain", grainy);
+    assert.equal(result.adjustments.grain, 0);
+    assert.equal(result.unsupported.length, 0, "should not be called impossible");
   });
 });

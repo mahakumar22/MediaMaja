@@ -8,3 +8,4 @@ build/
 next-env.d.ts
 tsconfig.tsbuildinfo
 .test-build/
+browser-check.png

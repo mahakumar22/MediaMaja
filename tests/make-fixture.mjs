@@ -1,8 +1,11 @@
 /**
- * Writes tests/fixture.png: a test image with known colours, so the browser
- * check can measure effects rather than eyeball them. The left half is a black
- * to white ramp, the right half two saturated blocks — between them they make
- * brightness, saturation and warmth changes easy to detect numerically.
+ * Writes the two test images the browser check uses.
+ *
+ * fixture.png has a black-to-white ramp on the left and two saturated blocks on
+ * the right, which makes brightness, saturation and warmth changes easy to
+ * detect numerically. fixture2.png is the same shape in different colours, so
+ * the check can prove that switching between photos really switches, and that
+ * each keeps its own edits.
  *
  *   node tests/make-fixture.mjs
  */
@@ -14,27 +17,25 @@ import { fileURLToPath } from "node:url";
 const WIDTH = 240;
 const HEIGHT = 160;
 
-const raw = Buffer.alloc((WIDTH * 3 + 1) * HEIGHT);
-let cursor = 0;
-for (let y = 0; y < HEIGHT; y += 1) {
-  raw[cursor] = 0; // per-scanline filter byte
-  cursor += 1;
-  for (let x = 0; x < WIDTH; x += 1) {
-    let r;
-    let g;
-    let b;
-    if (x < WIDTH / 2) {
-      r = g = b = Math.round((x / (WIDTH / 2)) * 255);
-    } else if (y < HEIGHT / 2) {
-      [r, g, b] = [200, 60, 40];
-    } else {
-      [r, g, b] = [40, 80, 200];
+function scanlines(topBlock, bottomBlock) {
+  const raw = Buffer.alloc((WIDTH * 3 + 1) * HEIGHT);
+  let cursor = 0;
+  for (let y = 0; y < HEIGHT; y += 1) {
+    raw[cursor] = 0; // per-scanline filter byte
+    cursor += 1;
+    for (let x = 0; x < WIDTH; x += 1) {
+      let rgb;
+      if (x < WIDTH / 2) {
+        const value = Math.round((x / (WIDTH / 2)) * 255);
+        rgb = [value, value, value];
+      } else {
+        rgb = y < HEIGHT / 2 ? topBlock : bottomBlock;
+      }
+      [raw[cursor], raw[cursor + 1], raw[cursor + 2]] = rgb;
+      cursor += 3;
     }
-    raw[cursor] = r;
-    raw[cursor + 1] = g;
-    raw[cursor + 2] = b;
-    cursor += 3;
   }
+  return raw;
 }
 
 const crcTable = Array.from({ length: 256 }, (_, n) => {
@@ -60,13 +61,21 @@ header.writeUInt32BE(HEIGHT, 4);
 header[8] = 8; // bit depth
 header[9] = 2; // truecolour
 
-const png = Buffer.concat([
-  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-  chunk("IHDR", header),
-  chunk("IDAT", deflateSync(raw)),
-  chunk("IEND", Buffer.alloc(0)),
-]);
+function png(raw) {
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
-const out = join(dirname(fileURLToPath(import.meta.url)), "fixture.png");
-writeFileSync(out, png);
-console.log(`wrote ${out} (${WIDTH}x${HEIGHT}, ${png.length} bytes)`);
+const here = dirname(fileURLToPath(import.meta.url));
+for (const [name, top, bottom] of [
+  ["fixture.png", [200, 60, 40], [40, 80, 200]],
+  ["fixture2.png", [60, 190, 90], [190, 190, 40]],
+]) {
+  const bytes = png(scanlines(top, bottom));
+  writeFileSync(join(here, name), bytes);
+  console.log(`wrote ${name} (${WIDTH}x${HEIGHT}, ${bytes.length} bytes)`);
+}

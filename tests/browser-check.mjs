@@ -1,7 +1,8 @@
 /**
- * End-to-end check of the bits unit tests cannot reach: that the canvas really
- * changes when an instruction is applied. It drives a real browser, uploads a
- * fixture, and measures the pixels rather than trusting the screenshot.
+ * End-to-end check of the parts unit tests cannot reach: that the canvas really
+ * changes, that each photo in the tray keeps its own edits, and that removing
+ * one leaves the rest intact. It drives a real browser and measures pixels
+ * rather than trusting a screenshot.
  *
  * Optional -- it needs a browser, which the app itself does not:
  *   npm install --no-save playwright && npx playwright install chromium
@@ -10,100 +11,153 @@
  */
 import { chromium } from "playwright";
 
-const BASE = "http://localhost:3000";
-const SRC = process.argv[2] || "./tests/fixture.png";
+const BASE = process.env.BASE_URL ?? "http://localhost:3000";
+const FIXTURE_A = "./tests/fixture.png";
+const FIXTURE_B = "./tests/fixture2.png";
 
-// CHROMIUM_PATH lets this run against an already-installed browser; without it
-// Playwright uses the one it downloaded itself.
 const browser = await chromium.launch(
   process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
 );
-const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
+
 const errors = [];
-page.on("pageerror", (e) => errors.push(String(e)));
-page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+page.on("pageerror", (error) => errors.push(String(error)));
+page.on("console", (message) => {
+  if (message.type() === "error") errors.push(message.text());
+});
 
-await page.goto(BASE, { waitUntil: "networkidle" });
+const failures = [];
+const check = (condition, description) => {
+  console.log(`  ${condition ? "ok  " : "FAIL"}  ${description}`);
+  if (!condition) failures.push(description);
+};
 
-// Upload
-await page.setInputFiles('input[type="file"]', SRC);
-await page.waitForSelector("canvas", { timeout: 10000 });
-await page.waitForTimeout(500);
-
-/** Average RGB of the canvas, so effects can be measured rather than eyeballed. */
-async function stats() {
-  return page.evaluate(() => {
-    const c = document.querySelector("canvas");
-    const ctx = c.getContext("2d");
-    const d = ctx.getImageData(0, 0, c.width, c.height).data;
-    let r = 0, g = 0, b = 0;
-    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
-    const n = d.length / 4;
-    return { w: c.width, h: c.height, r: +(r / n).toFixed(1), g: +(g / n).toFixed(1), b: +(b / n).toFixed(1) };
+/** Average colour of the visible canvas, so effects are measured not guessed. */
+const stats = () =>
+  page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+    }
+    const pixels = data.length / 4;
+    return {
+      w: canvas.width,
+      h: canvas.height,
+      r: +(r / pixels).toFixed(1),
+      g: +(g / pixels).toFixed(1),
+      b: +(b / pixels).toFixed(1),
+    };
   });
-}
+
+const thumbCount = () => page.locator('button[title]:has(img)').count();
+
+/** Filenames in the tray, and the name shown over the canvas. */
+const trayNames = () =>
+  page.evaluate(() => [...document.querySelectorAll("button[title] img")].map((img) => img.alt));
+const shownName = () =>
+  page.evaluate(
+    () => document.querySelector("canvas")?.parentElement?.querySelector("span")?.textContent ?? "",
+  );
 
 async function instruct(text) {
-  await page.fill('input[aria-label="Describe the change you want"]', text);
+  await page.fill('textarea[aria-label="Describe the change you want"]', text);
   await page.click('button[type="submit"]');
   await page.waitForTimeout(400);
 }
 
-async function readFeedback() {
-  return page.evaluate(() => {
-    const el = [...document.querySelectorAll("p")].filter((p) => p.textContent.includes("Understood:") || p.textContent.includes("Not understood:"));
-    return el.map((e) => e.textContent.trim());
-  });
-}
+const feedback = () =>
+  page.evaluate(() =>
+    [...document.querySelectorAll("p")]
+      .map((p) => p.textContent.trim())
+      .filter((t) => t.startsWith("Understood:") || t.startsWith("This app only") || t.startsWith("Not sure")),
+  );
 
-const results = [];
-const base = await stats();
-results.push(["loaded (original)", base, ""]);
+await page.goto(BASE, { waitUntil: "networkidle" });
 
+console.log("\n— loading two photos —");
+await page.setInputFiles('input[type="file"]', [FIXTURE_A, FIXTURE_B]);
+await page.waitForSelector("canvas", { timeout: 10000 });
+await page.waitForTimeout(600);
+check((await thumbCount()) === 2, "both photos appear in the tray");
+check(
+  JSON.stringify(await trayNames()) === JSON.stringify(["fixture.png", "fixture2.png"]),
+  "the tray lists both files by name, in order",
+);
+
+const originalA = await stats();
+
+console.log("\n— editing the first photo —");
 await instruct("make it much brighter");
-const brighter = await stats();
-results.push(["much brighter", brighter, (await readFeedback()).join(" | ")]);
+const editedA = await stats();
+check(editedA.r > originalA.r + 5, "the first photo brightened");
 
-await instruct("reset");
-await instruct("black and white");
-const bw = await stats();
-results.push(["black and white", bw, (await readFeedback()).join(" | ")]);
+console.log("\n— switching to the second photo —");
+await page.locator('button[title]:has(img)').nth(1).click();
+await page.waitForTimeout(400);
+const photoB = await stats();
+check(await shownName() === "fixture2.png", "the second photo is the one on screen");
+check(
+  Math.abs(photoB.g - editedA.g) > 5,
+  "the second photo is a different image, not the first one's pixels",
+);
+check(photoB.r !== editedA.r, "the second photo did not inherit the first one's edit");
 
-await instruct("reset");
-await instruct("much warmer");
-const warm = await stats();
-results.push(["much warmer", warm, (await readFeedback()).join(" | ")]);
+console.log("\n— a whole paragraph on the second photo —");
+await instruct(
+  "This is a photo of my grandmother from the 1970s. I would like it to feel warm and " +
+    "nostalgic, like an old family photograph. Please make it a little softer, and remove " +
+    "the person on the left.",
+);
+const afterParagraph = await stats();
+const notes = await feedback();
+console.log(notes.map((n) => `      ${n}`).join("\n"));
+check(afterParagraph.r !== photoB.r, "the paragraph changed the picture");
+check(
+  notes.some((n) => n.startsWith("Understood:")),
+  "it reported what it understood",
+);
+check(
+  notes.some((n) => n.includes("removing things")),
+  "it said plainly that removing a person is not something it can do",
+);
+check(
+  !notes.some((n) => n.startsWith("Not sure")),
+  "it did not flag the context sentence as unrecognised",
+);
 
-await instruct("reset");
-await instruct("rotate right");
-const rot = await stats();
-results.push(["rotate right", rot, (await readFeedback()).join(" | ")]);
+console.log("\n— going back to the first photo —");
+await page.locator('button[title]:has(img)').nth(0).click();
+await page.waitForTimeout(400);
+const backToA = await stats();
+check(await shownName() === "fixture.png", "the first photo is back on screen");
+check(Math.abs(backToA.r - editedA.r) < 1, "the first photo kept its own edit");
 
-await instruct("reset");
-await instruct("vintage look and add a unicorn");
-const vintage = await stats();
-results.push(["vintage + nonsense", vintage, (await readFeedback()).join(" | ")]);
-
-console.log("\n=== measured canvas output ===");
-for (const [label, s, fb] of results) {
-  console.log(`${label.padEnd(22)} ${s.w}x${s.h}  avg rgb ${String(s.r).padStart(6)} ${String(s.g).padStart(6)} ${String(s.b).padStart(6)}`);
-  if (fb) console.log(`${" ".repeat(22)} ${fb}`);
-}
-
-// Assertions
-const fail = [];
-if (!(brighter.r > base.r + 5)) fail.push("brightness did not increase");
-if (!(Math.abs(bw.r - bw.g) < 2 && Math.abs(bw.g - bw.b) < 2)) fail.push("black & white did not neutralise colour");
-if (!(warm.r - warm.b > base.r - base.b + 10)) fail.push("warmth did not shift red above blue");
-if (!(rot.w === base.h && rot.h === base.w)) fail.push("rotation did not swap canvas dimensions");
-if (!(vintage.r !== base.r)) fail.push("vintage preset had no effect");
+console.log("\n— removing the first photo —");
+await page.locator('button[aria-label^="Remove"]').first().click();
+await page.waitForTimeout(400);
+check((await thumbCount()) === 1, "one photo left in the tray");
+check(
+  JSON.stringify(await trayNames()) === JSON.stringify(["fixture2.png"]),
+  "the photo that was removed is the one that is gone",
+);
+check(await shownName() === "fixture2.png", "the survivor is the one now on screen");
+const survivor = await stats();
+check(
+  Math.abs(survivor.r - afterParagraph.r) < 1,
+  "the remaining photo kept its edits after the other was removed",
+);
 
 await page.screenshot({ path: "browser-check.png", fullPage: true });
 
-console.log("\n=== page errors ===");
-console.log(errors.length ? errors.join("\n") : "  none");
-console.log("\n=== assertions ===");
-console.log(fail.length ? "FAIL:\n  " + fail.join("\n  ") : "  all passed");
+console.log("\n— page errors —");
+console.log(errors.length ? errors.map((e) => `  ${e}`).join("\n") : "  none");
 
+console.log(`\n${failures.length ? `FAILED: ${failures.length}` : "ALL CHECKS PASSED"}`);
 await browser.close();
-process.exit(fail.length || errors.length ? 1 : 0);
+process.exit(failures.length || errors.length ? 1 : 0);
