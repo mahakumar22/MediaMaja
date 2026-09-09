@@ -45,7 +45,8 @@ of `npm`.
 | Light | brighter, darker, more contrast, flat |
 | Colour | warmer, cooler, more vivid, muted, black and white, sepia, hue |
 | Texture | softer, blur, sharper, grain, fade, vignette |
-| Whole looks | vintage, dramatic, cinematic, noir, dreamy, summer |
+| Whole looks | vintage, dramatic, cinematic, noir, dreamy, summer, airy, professional |
+| Just make it good | "make it look nice", "improve this", "enhance it", "fix the lighting" |
 | Geometry | rotate left, rotate right, upside down, flip horizontally |
 
 Words are matched wherever they appear, so "could you make this a little
@@ -68,6 +69,11 @@ different outcomes apart, because they need different answers from you:
   not do, like "remove the person on the left". Rephrasing will not help, and
   saying so beats sending you round in circles.
 - **Not sure** — wording it could not place. Try different words, or the sliders.
+
+A vague request is a real request: "make it look nice" applies a modest
+all-round lift rather than being turned away. It never outranks something the
+app cannot do, though — "fix her skin" says it cannot retouch people rather
+than quietly applying a general improvement instead.
 
 Prose that is context rather than instruction — "this is a photo of my
 grandmother" — is passed over in silence, so describing your photo does not
@@ -102,23 +108,38 @@ brightness, contrast, saturation, blur, sepia, grayscale and hue, then a pixel
 pass for warmth, fade, vignette and grain, which CSS has no equivalent for.
 Sharpening is a final 3×3 convolution so it acts on the finished image.
 
+### Why the preview is not full resolution
+
+The pixel passes cost time in proportion to the number of pixels, and dragging a
+slider asks for dozens of renders a second. At full resolution a 6-megapixel
+photo takes around 700ms per render, so a drag buries the browser and the slider
+appears to do nothing at all.
+
+So the preview renders at no more than `PREVIEW_MAX_EDGE` (1400px on the long
+edge) and renders on an animation frame, cancelling any frame still pending — a
+burst of slider events collapses into one render. **The file you download is
+always rendered at full resolution.** Blur scales with the preview so it does not
+look stronger on screen than in the saved file; sharpening, being a fixed 3×3
+kernel, is very slightly softer in the preview than in the export.
+
 ## Tests
 
 ```bash
 npm test
 ```
 
-37 assertions covering the parser: intensity words ranking correctly, negation,
+42 assertions covering the parser: intensity words ranking correctly, negation,
 removal, clause splitting, presets, geometry, accumulation, clamping to the
 slider range, multi-sentence paragraphs, several effects in one clause, context
-sentences staying silent, and impossible requests being told apart from
-unrecognised wording.
+sentences staying silent, vague requests like "make it look nice" being
+honoured, and impossible requests being told apart from unrecognised wording.
 
 The renderer and the photo tray need a browser, so they are checked separately
 by driving a real one and measuring the output: that brightness genuinely raises
 the average pixel value, that each photo keeps its own edits when you switch
-between them, and that removing one leaves the right photo behind — checked by
-filename, since an average pixel value cannot tell two pictures apart:
+between them, that removing one leaves the right photo behind (checked by
+filename, since an average pixel value cannot tell two pictures apart), and that
+dragging a slider on a photo-sized image stays responsive:
 
 ```bash
 npm install --no-save playwright && npx playwright install chromium
@@ -135,5 +156,5 @@ node tests/browser-check.mjs
 - Adjustments only. It cannot add, remove or repaint objects — "remove the car"
   or "put me on a beach" needs a generative image model, which this app
   deliberately does not use, since that means an API key and a bill per edit.
-- Very large photos (above roughly 6000px) will feel slow on the pixel passes,
-  since the work happens on your own machine.
+- Saving a very large photo takes a moment, since the download is rendered at
+  full resolution on your own machine. The preview stays quick regardless.

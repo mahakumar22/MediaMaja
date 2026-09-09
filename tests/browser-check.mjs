@@ -9,11 +9,21 @@
  *   npm run build && npm start        (in another terminal)
  *   node tests/browser-check.mjs
  */
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { chromium } from "playwright";
+
+import { LARGE_FIXTURE, TESTS_DIR, writeLargeFixture } from "./make-fixture.mjs";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const FIXTURE_A = "./tests/fixture.png";
 const FIXTURE_B = "./tests/fixture2.png";
+
+/** Mirrors PREVIEW_MAX_EDGE in src/lib/render.ts. */
+const PREVIEW_MAX_EDGE = 1400;
+/** Generous: the regression this guards against took 11 seconds. */
+const DRAG_BUDGET_MS = 4000;
 
 const browser = await chromium.launch(
   process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
@@ -154,6 +164,55 @@ check(
 );
 
 await page.screenshot({ path: "browser-check.png", fullPage: true });
+
+// A real photograph, not a thumbnail. The preview used to render at full
+// resolution, so dragging a slider on a 6-megapixel photo queued up hundreds of
+// milliseconds of work per event and the control appeared dead.
+console.log("\n— a photo-sized image —");
+const largePath = join(TESTS_DIR, LARGE_FIXTURE.name);
+if (!existsSync(largePath)) writeLargeFixture();
+
+await page.locator('button[aria-label^="Remove"]').first().click();
+await page.waitForTimeout(300);
+await page.setInputFiles('input[type="file"]', [largePath]);
+await page.waitForSelector("canvas");
+await page.waitForTimeout(1200);
+
+const preview = await page.evaluate(() => {
+  const canvas = document.querySelector("canvas");
+  return { w: canvas.width, h: canvas.height };
+});
+console.log(
+  `      source ${LARGE_FIXTURE.width}x${LARGE_FIXTURE.height}, preview ${preview.w}x${preview.h}`,
+);
+check(
+  Math.max(preview.w, preview.h) <= PREVIEW_MAX_EDGE,
+  `the preview is capped at ${PREVIEW_MAX_EDGE}px rather than full resolution`,
+);
+
+await page.locator("summary", { hasText: "Fine-tune by hand" }).click();
+await page.waitForTimeout(300);
+
+const readAverage = () =>
+  page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let total = 0;
+    for (let i = 0; i < data.length; i += 4) total += data[i];
+    return +(total / (data.length / 4)).toFixed(2);
+  });
+
+const beforeDrag = await readAverage();
+await page.locator('input[type="range"]').nth(7).focus(); // vignette: the pixel pass
+const started = Date.now();
+for (let i = 0; i < 15; i += 1) await page.keyboard.press("ArrowRight");
+await page.waitForTimeout(100);
+const dragMs = Date.now() - started;
+const afterDrag = await readAverage();
+
+console.log(`      15 rapid slider steps took ${dragMs}ms`);
+check(dragMs < DRAG_BUDGET_MS, `dragging a slider stays responsive (under ${DRAG_BUDGET_MS}ms)`);
+check(afterDrag !== beforeDrag, "the slider actually changed the picture");
 
 console.log("\n— page errors —");
 console.log(errors.length ? errors.map((e) => `  ${e}`).join("\n") : "  none");

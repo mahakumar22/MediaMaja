@@ -9,5 +9,9 @@
     "incremental": false,
     "plugins": []
   },
-  "include": ["src/lib/adjustments.ts", "src/lib/parse.ts", "tests/**/*.ts"]
+  "include": [
+    "src/lib/adjustments.ts",
+    "src/lib/parse.ts",
+    "tests/**/*.ts"
+  ]
 }

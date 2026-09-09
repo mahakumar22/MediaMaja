@@ -9,3 +9,5 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 .test-build/
 browser-check.png
+tests/fixture-large.png
+slider-diag.png

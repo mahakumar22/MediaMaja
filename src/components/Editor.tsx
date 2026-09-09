@@ -10,7 +10,7 @@ import {
   type Adjustments,
 } from "@/lib/adjustments";
 import { knownPhrases, parseInstruction } from "@/lib/parse";
-import { renderToCanvas } from "@/lib/render";
+import { FULL_RESOLUTION, PREVIEW_MAX_EDGE, renderToCanvas } from "@/lib/render";
 
 const EXAMPLES = [
   "make it brighter and a bit warmer",
@@ -47,11 +47,22 @@ export function Editor() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // One undo entry per slider drag, rather than one per pixel of movement.
+  const sliderGesture = useRef(false);
   const active = photos.find((photo) => photo.id === activeId) ?? null;
 
+  // Dragging a slider fires many changes a second. Rendering on the next
+  // animation frame and cancelling any frame still pending collapses that
+  // burst into a single render, so the preview keeps up instead of queueing.
   useEffect(() => {
-    if (!active || !canvasRef.current) return;
-    renderToCanvas(active.image, canvasRef.current, showBefore ? NEUTRAL : active.adjustments);
+    const canvas = canvasRef.current;
+    if (!active || !canvas) return;
+
+    const { image, adjustments } = active;
+    const frame = requestAnimationFrame(() => {
+      renderToCanvas(image, canvas, showBefore ? NEUTRAL : adjustments, PREVIEW_MAX_EDGE);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [active, showBefore]);
 
   // Object URLs are held for the life of the tray, so they are released only
@@ -137,9 +148,20 @@ export function Editor() {
     });
   }
 
+  function beginSliderGesture() {
+    if (sliderGesture.current) return;
+    sliderGesture.current = true;
+    updateActive((photo) => ({ ...photo, history: [...photo.history, photo.adjustments] }));
+  }
+
+  function endSliderGesture() {
+    sliderGesture.current = false;
+  }
+
   function download(photo: Photo) {
+    // The preview is downscaled for speed; the saved file never is.
     const canvas = document.createElement("canvas");
-    renderToCanvas(photo.image, canvas, photo.adjustments);
+    renderToCanvas(photo.image, canvas, photo.adjustments, FULL_RESOLUTION);
     canvas.toBlob((blob) => {
       if (!blob) return;
       const url = URL.createObjectURL(blob);
@@ -285,12 +307,16 @@ export function Editor() {
                     min={LIMITS[key].min}
                     max={LIMITS[key].max}
                     value={active.adjustments[key]}
+                    onPointerDown={beginSliderGesture}
+                    onKeyDown={beginSliderGesture}
+                    onPointerUp={endSliderGesture}
+                    onKeyUp={endSliderGesture}
+                    onBlur={endSliderGesture}
                     onChange={(event) => {
                       const value = Number(event.target.value);
                       updateActive((photo) => ({
                         ...photo,
                         adjustments: { ...photo.adjustments, [key]: value },
-                        history: [...photo.history, photo.adjustments],
                       }));
                     }}
                     className="min-w-0 flex-1"

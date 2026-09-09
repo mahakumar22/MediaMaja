@@ -297,3 +297,50 @@ describe("requests it cannot do", () => {
     assert.equal(result.unsupported.length, 0, "should not be called impossible");
   });
 });
+
+describe("vague requests", () => {
+  // The most common thing anyone types is not a specific instruction. Turning
+  // these away is the app failing at its main job, not a wording problem.
+  it("treats a general request for improvement as a real instruction", () => {
+    for (const text of [
+      "make it look nice",
+      "improve this photo",
+      "make it better",
+      "enhance it",
+      "make it more beautiful",
+      "fix the lighting",
+      "can you clean it up",
+      "do your thing",
+    ]) {
+      const result = parse(text);
+      assert.equal(result.unknown.length, 0, `rejected: ${text} -> ${result.unknown}`);
+      assert.ok(result.applied.length > 0, `nothing applied for: ${text}`);
+    }
+  });
+
+  it("makes a visible but restrained change", () => {
+    const result = parse("make it look nice").adjustments;
+    assert.ok(result.contrast > 0 && result.saturation > 0 && result.sharpen > 0);
+    assert.ok(result.contrast < 30, "an unasked-for change should stay modest");
+  });
+});
+
+describe("colour wording", () => {
+  it("reads a bare mention of colour as wanting more of it", () => {
+    assert.ok(parse("nicer colours").adjustments.saturation > 0);
+    assert.ok(parse("richer color").adjustments.saturation > 0);
+  });
+
+  // "no colour" must not be read as "colour", which would do the opposite.
+  it("reads no colour and without colour as black and white", () => {
+    for (const text of ["no colour", "no colors", "without colour", "without colours"]) {
+      const result = parse(text).adjustments;
+      assert.equal(result.grayscale, 100, text);
+      assert.ok(result.saturation <= 0, `${text} should not have added saturation`);
+    }
+  });
+
+  it("still reads less colour as a reduction", () => {
+    assert.ok(parse("less colour").adjustments.saturation < 0);
+  });
+});

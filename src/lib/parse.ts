@@ -63,7 +63,7 @@ const EFFECTS: { phrases: string[]; effect: Effect }[] = [
     effect: { key: "contrast", step: 20, sign: -1, label: "contrast" },
   },
   {
-    phrases: ["more colour", "more color", "colourful", "colorful", "saturation", "vibrant", "vivid", "saturated", "richer", "rich colours", "rich colors", "pop", "punch"],
+    phrases: ["more colour", "more color", "colourful", "colorful", "saturation", "vibrant", "vivid", "saturated", "richer", "rich colours", "rich colors", "pop", "punch", "colours", "colors", "colour", "color"],
     effect: { key: "saturation", step: 22, sign: 1, label: "saturation" },
   },
   {
@@ -104,8 +104,20 @@ const EFFECTS: { phrases: string[]; effect: Effect }[] = [
   },
 ];
 
-/** Whole looks. A mood word is usually asking for one of these. */
-const PRESETS: { phrases: string[]; name: string; values: Partial<Record<NumericKey, number>> }[] = [
+/**
+ * Whole looks. A mood word is usually asking for one of these.
+ *
+ * `fallback` marks a look so broad that it should never outrank a request the
+ * app cannot do: "fix" means improve in "fix the lighting", but in "fix her
+ * skin" it means retouching, and quietly applying a general lift there would
+ * hide the fact that nothing was done about the actual request.
+ */
+const PRESETS: {
+  phrases: string[];
+  name: string;
+  values: Partial<Record<NumericKey, number>>;
+  fallback?: boolean;
+}[] = [
   {
     phrases: ["old family photo", "old family photograph", "vintage", "retro", "nostalgic", "nostalgia", "old school", "seventies", "1970s", "70s", "1980s", "80s", "yesteryear"],
     name: "vintage",
@@ -145,6 +157,21 @@ const PRESETS: { phrases: string[]; name: string; values: Partial<Record<Numeric
     phrases: ["professional", "polished", "magazine", "editorial", "high end"],
     name: "polished",
     values: { contrast: 18, saturation: 10, sharpen: 35 },
+  },
+  // The most common thing anyone types is not an instruction at all, it is
+  // "make it look nice". Rejecting that is the app failing at its main job, so
+  // it maps to a modest all-round lift.
+  {
+    phrases: [
+      "look nice", "looks nice", "nice", "nicer", "better", "best", "improve", "improved",
+      "improvement", "enhance", "enhanced", "beautiful", "prettier", "pretty", "lovely",
+      "good", "great", "amazing", "stunning", "gorgeous", "wow", "fix", "fix it", "fix this",
+      "clean it up", "clean up", "tidy it up", "sort it out", "do your thing", "work your magic",
+      "lighting", "the lighting", "quality",
+    ],
+    name: "improved",
+    values: { brightness: 6, contrast: 14, saturation: 12, sharpen: 25 },
+    fallback: true,
   },
 ];
 
@@ -214,6 +241,9 @@ const STOPWORDS = new Set([
 
 const PRE_SPLIT_ALIASES: [RegExp, string][] = [
   [/\bblack\s*(?:and|&|n)\s*white\b/gi, " grayscale "],
+  // Settled before "colour" is read as a request for more of it.
+  [/\bno\s+colou?rs?\b/gi, " grayscale "],
+  [/\bwithout\s+colou?rs?\b/gi, " grayscale "],
   [/\bbright\s+and\s+airy\b/gi, " airy "],
   [/\blight\s+and\s+airy\b/gi, " airy "],
   [/\bwarm\s+and\s+(?:cosy|cozy)\b/gi, " warm "],
@@ -314,8 +344,9 @@ export function parseInstruction(text: string, base: Adjustments = NEUTRAL): Par
 
     // Presets run before individual effects so "vintage but brighter" lands the
     // look first and then nudges it, rather than the other way round.
-    for (const { phrases, name, values } of PRESETS) {
+    for (const { phrases, name, values, fallback } of PRESETS) {
       if (!phrases.some((phrase) => containsPhrase(clause, phrase))) continue;
+      if (fallback && unsupportedIn(clause)) continue;
       const scale = intensityOf(clause);
       for (const [key, value] of Object.entries(values) as [NumericKey, number][]) {
         next[key] = clamp(key, value * scale);

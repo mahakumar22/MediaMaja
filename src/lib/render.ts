@@ -1,6 +1,21 @@
 import type { Adjustments } from "./adjustments";
 
 /**
+ * Longest edge, in pixels, that the on-screen preview is rendered at.
+ *
+ * This matters more than it looks. The pixel passes below are linear in the
+ * number of pixels, so at full resolution a 6-megapixel phone photo costs
+ * roughly 700ms per render -- and dragging a slider asks for dozens of renders
+ * a second, which buries the browser and makes the control look dead. Rendering
+ * the preview at a size nobody can tell apart on screen cuts that by more than
+ * an order of magnitude. Downloads still render at full resolution.
+ */
+export const PREVIEW_MAX_EDGE = 1400;
+
+/** Full resolution, for the file the user actually saves. */
+export const FULL_RESOLUTION = Number.POSITIVE_INFINITY;
+
+/**
  * Draws an image through a set of adjustments onto a canvas.
  *
  * Two passes. The first uses the browser's own filter pipeline for the things
@@ -13,25 +28,35 @@ export function renderToCanvas(
   source: CanvasImageSource & { width: number; height: number },
   canvas: HTMLCanvasElement,
   adjustments: Adjustments,
+  maxEdge: number = FULL_RESOLUTION,
 ): void {
   const quarterTurns = ((adjustments.rotate % 360) + 360) % 360;
   const swapsAxes = quarterTurns === 90 || quarterTurns === 270;
 
-  const sourceWidth = source.width;
-  const sourceHeight = source.height;
-  canvas.width = swapsAxes ? sourceHeight : sourceWidth;
-  canvas.height = swapsAxes ? sourceWidth : sourceHeight;
+  const uprightWidth = swapsAxes ? source.height : source.width;
+  const uprightHeight = swapsAxes ? source.width : source.height;
+
+  // Only ever scales down; a small photo is never blown up to fill the cap.
+  const scale = Math.min(1, maxEdge / Math.max(uprightWidth, uprightHeight));
+
+  canvas.width = Math.max(1, Math.round(uprightWidth * scale));
+  canvas.height = Math.max(1, Math.round(uprightHeight * scale));
 
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return;
+
+  const drawWidth = source.width * scale;
+  const drawHeight = source.height * scale;
 
   context.save();
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.translate(canvas.width / 2, canvas.height / 2);
   context.rotate((quarterTurns * Math.PI) / 180);
   context.scale(adjustments.flipHorizontal ? -1 : 1, adjustments.flipVertical ? -1 : 1);
-  context.filter = cssFilter(adjustments);
-  context.drawImage(source, -sourceWidth / 2, -sourceHeight / 2, sourceWidth, sourceHeight);
+  // Blur is measured in pixels, so it has to shrink with the image or the
+  // preview would look blurrier than the file that gets saved.
+  context.filter = cssFilter(adjustments, scale);
+  context.drawImage(source, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
   context.restore();
 
   applyPixelEffects(context, canvas, adjustments);
@@ -40,7 +65,7 @@ export function renderToCanvas(
 }
 
 /** The adjustments the browser's own filter pipeline can do directly. */
-export function cssFilter(adjustments: Adjustments): string {
+export function cssFilter(adjustments: Adjustments, scale = 1): string {
   const parts: string[] = [];
 
   if (adjustments.brightness !== 0) parts.push(`brightness(${1 + adjustments.brightness / 130})`);
@@ -48,7 +73,7 @@ export function cssFilter(adjustments: Adjustments): string {
   if (adjustments.saturation !== 0) parts.push(`saturate(${Math.max(0, 1 + adjustments.saturation / 90)})`);
   if (adjustments.grayscale > 0) parts.push(`grayscale(${adjustments.grayscale / 100})`);
   if (adjustments.sepia > 0) parts.push(`sepia(${adjustments.sepia / 100})`);
-  if (adjustments.blur > 0) parts.push(`blur(${adjustments.blur}px)`);
+  if (adjustments.blur > 0) parts.push(`blur(${(adjustments.blur * scale).toFixed(2)}px)`);
   if (adjustments.hue !== 0) parts.push(`hue-rotate(${adjustments.hue}deg)`);
 
   return parts.length > 0 ? parts.join(" ") : "none";

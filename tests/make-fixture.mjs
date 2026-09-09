@@ -17,19 +17,19 @@ import { fileURLToPath } from "node:url";
 const WIDTH = 240;
 const HEIGHT = 160;
 
-function scanlines(topBlock, bottomBlock) {
-  const raw = Buffer.alloc((WIDTH * 3 + 1) * HEIGHT);
+function scanlines(topBlock, bottomBlock, width = WIDTH, height = HEIGHT) {
+  const raw = Buffer.alloc((width * 3 + 1) * height);
   let cursor = 0;
-  for (let y = 0; y < HEIGHT; y += 1) {
+  for (let y = 0; y < height; y += 1) {
     raw[cursor] = 0; // per-scanline filter byte
     cursor += 1;
-    for (let x = 0; x < WIDTH; x += 1) {
+    for (let x = 0; x < width; x += 1) {
       let rgb;
-      if (x < WIDTH / 2) {
-        const value = Math.round((x / (WIDTH / 2)) * 255);
+      if (x < width / 2) {
+        const value = Math.round((x / (width / 2)) * 255);
         rgb = [value, value, value];
       } else {
-        rgb = y < HEIGHT / 2 ? topBlock : bottomBlock;
+        rgb = y < height / 2 ? topBlock : bottomBlock;
       }
       [raw[cursor], raw[cursor + 1], raw[cursor + 2]] = rgb;
       cursor += 3;
@@ -55,13 +55,13 @@ function chunk(type, data) {
   return Buffer.concat([length, body, checksum]);
 }
 
-const header = Buffer.alloc(13);
-header.writeUInt32BE(WIDTH, 0);
-header.writeUInt32BE(HEIGHT, 4);
-header[8] = 8; // bit depth
-header[9] = 2; // truecolour
+function png(raw, width, height) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8; // bit depth
+  header[9] = 2; // truecolour
 
-function png(raw) {
   return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk("IHDR", header),
@@ -70,12 +70,39 @@ function png(raw) {
   ]);
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
-for (const [name, top, bottom] of [
-  ["fixture.png", [200, 60, 40], [40, 80, 200]],
-  ["fixture2.png", [60, 190, 90], [190, 190, 40]],
-]) {
-  const bytes = png(scanlines(top, bottom));
-  writeFileSync(join(here, name), bytes);
-  console.log(`wrote ${name} (${WIDTH}x${HEIGHT}, ${bytes.length} bytes)`);
+export const TESTS_DIR = dirname(fileURLToPath(import.meta.url));
+
+/** Writes one fixture and returns its path. */
+export function writeFixture(name, { width = WIDTH, height = HEIGHT, top, bottom }) {
+  const bytes = png(scanlines(top, bottom, width, height), width, height);
+  const path = join(TESTS_DIR, name);
+  writeFileSync(path, bytes);
+  return { path, width, height, bytes: bytes.length };
+}
+
+/**
+ * A photo-sized fixture, for checking that the preview stays responsive on a
+ * real photograph. It is ~1.3MB, so it is generated on demand and gitignored
+ * rather than committed.
+ */
+export const LARGE_FIXTURE = { name: "fixture-large.png", width: 3000, height: 2000 };
+
+export function writeLargeFixture() {
+  return writeFixture(LARGE_FIXTURE.name, {
+    width: LARGE_FIXTURE.width,
+    height: LARGE_FIXTURE.height,
+    top: [200, 60, 40],
+    bottom: [40, 80, 200],
+  });
+}
+
+// Only the two small committed fixtures are written when run directly.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  for (const [name, top, bottom] of [
+    ["fixture.png", [200, 60, 40], [40, 80, 200]],
+    ["fixture2.png", [60, 190, 90], [190, 190, 40]],
+  ]) {
+    const written = writeFixture(name, { top, bottom });
+    console.log(`wrote ${name} (${written.width}x${written.height}, ${written.bytes} bytes)`);
+  }
 }
